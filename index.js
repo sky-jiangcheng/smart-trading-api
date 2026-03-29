@@ -138,6 +138,117 @@ function normalizeThresholds(value) {
     .filter((item) => Boolean(item));
 }
 
+const BOARD_DIMENSIONS = [
+  {
+    key: "macro",
+    label: "Macro",
+    labelZh: "宏观",
+    keywords: ["fed", "cpi", "pmi", "rate", "yield", "inflation", "macro", "policy", "利率", "通胀", "宏观", "政策"],
+    assets: ["US10Y", "DXY", "SPX"],
+    tone: "#1d4ed8",
+    description: "Rates, inflation, policy and the curve.",
+  },
+  {
+    key: "liquidity",
+    label: "Liquidity",
+    labelZh: "流动性",
+    keywords: ["liquidity", "flow", "funding", "volume", "turnover", "资金", "流动性", "成交", "换手"],
+    assets: ["SPX", "QQQ", "BTC"],
+    tone: "#0f766e",
+    description: "Funding, depth and trade flow.",
+  },
+  {
+    key: "valuation",
+    label: "Valuation",
+    labelZh: "估值",
+    keywords: ["valuation", "multiple", "pe", "pb", "eps", "估值", "倍数"],
+    assets: ["QQQ", "AAPL", "NVDA"],
+    tone: "#7c3aed",
+    description: "Re-rating, compression and premium pricing.",
+  },
+  {
+    key: "risk",
+    label: "Risk",
+    labelZh: "风险偏好",
+    keywords: ["risk", "vix", "volatility", "hedge", "drawdown", "risk off", "风险", "波动", "避险"],
+    assets: ["VIX", "GLD", "SPX"],
+    tone: "#b91c1c",
+    description: "Volatility, hedging and positioning.",
+  },
+  {
+    key: "event",
+    label: "Event",
+    labelZh: "事件驱动",
+    keywords: ["earnings", "guidance", "event", "policy", "catalyst", "财报", "事件", "催化", "政策"],
+    assets: ["AAPL", "TSLA", "NVDA"],
+    tone: "#b45309",
+    description: "Earnings, policy changes and catalysts.",
+  },
+  {
+    key: "flow",
+    label: "Flow",
+    labelZh: "资金流",
+    keywords: ["buying", "selling", "inflow", "outflow", "order", "flow", "资金", "流入", "流出", "订单"],
+    assets: ["SPX", "BTC", "XAU"],
+    tone: "#0891b2",
+    description: "Money movement and market participation.",
+  },
+  {
+    key: "sentiment",
+    label: "Sentiment",
+    labelZh: "情绪",
+    keywords: ["sentiment", "panic", "euphoria", "fear", "mood", "情绪", "恐慌", "乐观"],
+    assets: ["VIX", "SPX", "BTC"],
+    tone: "#db2777",
+    description: "Tone, fear and crowding.",
+  },
+  {
+    key: "technical",
+    label: "Technical",
+    labelZh: "技术位",
+    keywords: ["breakout", "support", "resistance", "trend", "technical", "突破", "支撑", "阻力", "趋势"],
+    assets: ["SPX", "QQQ", "BTC"],
+    tone: "#2563eb",
+    description: "Structure, levels and trend confirmations.",
+  },
+  {
+    key: "industry",
+    label: "Industry",
+    labelZh: "产业链",
+    keywords: ["semiconductor", "energy", "bank", "health", "industry", "产业", "链条", "半导体"],
+    assets: ["NVDA", "XLE", "XLF"],
+    tone: "#14b8a6",
+    description: "Sector leadership and supply-chain context.",
+  },
+  {
+    key: "earnings",
+    label: "Earnings",
+    labelZh: "报表",
+    keywords: ["earnings", "revenue", "margin", "profit", "guidance", "财报", "营收", "利润", "毛利"],
+    assets: ["AAPL", "NVDA", "TSLA"],
+    tone: "#f97316",
+    description: "Results, margins and guidance revisions.",
+  },
+];
+
+function classifyTextDimensions(text) {
+  const haystack = String(text || "").toLowerCase();
+  const matches = BOARD_DIMENSIONS.filter((dimension) =>
+    dimension.keywords.some((keyword) => haystack.includes(keyword.toLowerCase())),
+  );
+
+  if (matches.length > 0) {
+    return matches;
+  }
+
+  return [BOARD_DIMENSIONS[0]];
+}
+
+function buildWhyItMatters(dimensions, title) {
+  const primary = dimensions[0];
+  return `${title} primarily maps to ${primary.labelZh}, so it matters for ${primary.assets.slice(0, 2).join(" and ")}.`;
+}
+
 function writeJson(filePath, data) {
   try {
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -431,6 +542,8 @@ function buildNewsItem(item, sourceLabel, sourceUrl, index, fallbackPublishedAt 
   const url = item.link || item.guid || `https://news.google.com/search?q=${encodeURIComponent(title || "news")}`;
   const publishedAt = item.pubDate || item.isoDate || item.updated || item.date || fallbackPublishedAt || null;
   const combinedText = `${title} ${item.contentSnippet || item.summary || ""}`.toLowerCase();
+  const dimensions = classifyTextDimensions(`${title} ${item.contentSnippet || item.summary || ""} ${sourceLabel}`);
+  const primaryDimension = dimensions[0];
 
   return {
     id: `${getDomain(url)}-${index}-${scoreFromText(title, index)}`,
@@ -445,6 +558,12 @@ function buildNewsItem(item, sourceLabel, sourceUrl, index, fallbackPublishedAt 
     age: toRelativeTime(publishedAt),
     publishedAt,
     summary: item.contentSnippet || item.summary || "",
+    dimensions: dimensions.map((dimension) => dimension.key),
+    dimensionLabel: primaryDimension.label,
+    dimensionLabelZh: primaryDimension.labelZh,
+    dimensionTone: primaryDimension.tone,
+    relatedAssets: primaryDimension.assets,
+    whyItMatters: buildWhyItMatters(dimensions, title),
   };
 }
 
@@ -651,6 +770,8 @@ function generateSignals() {
 
   cachedNews.forEach((item) => {
     const text = `${item.title} ${item.summary || ""} ${item.domain || ""}`.toLowerCase();
+    const dimensions = classifyTextDimensions(text);
+    const primaryDimension = dimensions[0];
 
     signalRules.forEach((rule) => {
       if (!rule.keyword || !rule.asset) return;
@@ -659,12 +780,123 @@ function generateSignals() {
           asset: rule.asset,
           direction: rule.direction || "neutral",
           reason: rule.reason || `Matched keyword: ${rule.keyword}`,
+          dimension: primaryDimension.key,
+          dimensionLabel: primaryDimension.label,
+          dimensionLabelZh: primaryDimension.labelZh,
+          tone: primaryDimension.tone,
+          relatedAssets: primaryDimension.assets,
+          relatedNewsIds: [item.id],
+          whyItMatters: buildWhyItMatters(dimensions, rule.asset),
+          confidence: Math.min(0.98, 0.62 + (scoreFromText(text, rule.keyword.length) % 33) / 100),
         };
       }
     });
   });
 
   cachedSignals = Object.values(signalMap);
+}
+
+function buildBoardSummary() {
+  const newsDimensionCounts = {};
+  const signalDimensionCounts = {};
+  const thresholdDimensionCounts = {};
+
+  cachedNews.forEach((item) => {
+    const dimensions = Array.isArray(item.dimensions) && item.dimensions.length > 0 ? item.dimensions : ["macro"];
+    dimensions.forEach((dimension) => {
+      newsDimensionCounts[dimension] = (newsDimensionCounts[dimension] || 0) + 1;
+    });
+  });
+
+  cachedSignals.forEach((item) => {
+    const dimension = item.dimension || "macro";
+    signalDimensionCounts[dimension] = (signalDimensionCounts[dimension] || 0) + 1;
+  });
+
+  thresholds.forEach((item) => {
+    const dimension = classifyTextDimensions(`${item.symbol} ${item.name} ${item.category} ${item.note} ${item.tags.join(" ")}`)[0].key;
+    thresholdDimensionCounts[dimension] = (thresholdDimensionCounts[dimension] || 0) + 1;
+  });
+
+  const dimensions = BOARD_DIMENSIONS.map((dimension) => {
+    const newsCount = newsDimensionCounts[dimension.key] || 0;
+    const signalCount = signalDimensionCounts[dimension.key] || 0;
+    const thresholdCount = thresholdDimensionCounts[dimension.key] || 0;
+    const intensity = signalCount + thresholdCount + newsCount;
+    const state = intensity >= 8 ? "hot" : intensity >= 5 ? "warming" : thresholdCount >= 2 ? "cooling" : "neutral";
+
+    return {
+      ...dimension,
+      state,
+      newsCount,
+      signalCount,
+      thresholdCount,
+      representativeAssets: dimension.assets,
+    };
+  });
+
+  const topNews = cachedNews.slice(0, 3).map((item) => ({
+    id: item.id,
+    title: item.title,
+    source: item.source,
+    sourceUrl: item.sourceUrl,
+    domain: item.domain,
+    summary: item.summary,
+    publishedAt: item.publishedAt,
+    age: item.age,
+    points: item.points,
+    comments: item.comments,
+    dimensions: item.dimensions || [],
+    dimensionLabel: item.dimensionLabel,
+    dimensionLabelZh: item.dimensionLabelZh,
+    dimensionTone: item.dimensionTone,
+    relatedAssets: item.relatedAssets || [],
+    whyItMatters: item.whyItMatters,
+    url: item.url,
+  }));
+
+  const topSignals = cachedSignals.slice(0, 3).map((item) => ({
+    ...item,
+  }));
+
+  const reportBriefs = [
+    {
+      label: "Market Pulse",
+      labelZh: "市场脉冲",
+      value: `${cachedSignals.filter((item) => item.direction === "bullish").length}/${cachedSignals.filter((item) => item.direction === "bearish").length}`,
+      meta: "Bullish / bearish balance",
+    },
+    {
+      label: "Threshold Pressure",
+      labelZh: "阈值压力",
+      value: `${thresholds.filter((item) => {
+        const triggered = item.direction === "above" ? item.currentValue >= item.thresholdValue : item.currentValue <= item.thresholdValue;
+        return triggered;
+      }).length}/${thresholds.length}`,
+      meta: "Triggered vs total thresholds",
+    },
+    {
+      label: "Coverage",
+      labelZh: "覆盖范围",
+      value: `${cachedNews.length}`,
+      meta: "News items in view",
+    },
+  ];
+
+  const marketState = cachedSignals.some((item) => item.direction === "bearish")
+    ? "risk"
+    : cachedSignals.some((item) => item.direction === "bullish")
+      ? "warming"
+      : "neutral";
+
+  return {
+    marketState,
+    generatedAt: new Date().toISOString(),
+    topNews,
+    topSignals,
+    dimensions,
+    reportBriefs,
+  };
 }
 
 async function fetchNews() {
@@ -810,6 +1042,12 @@ app.get("/signals", async (req, res) => {
   await bootstrapPromise;
   await loadLatestConfigBundle();
   res.json(cachedSignals);
+});
+
+app.get("/board", async (req, res) => {
+  await bootstrapPromise;
+  await loadLatestConfigBundle();
+  res.json(buildBoardSummary());
 });
 
 app.get("/sources", async (req, res) => {
