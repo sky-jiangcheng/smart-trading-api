@@ -249,6 +249,32 @@ function buildWhyItMatters(dimensions, title) {
   return `${title} primarily maps to ${primary.labelZh}, so it matters for ${primary.assets.slice(0, 2).join(" and ")}.`;
 }
 
+function getMarketStateMeta(marketState) {
+  switch (marketState) {
+    case "risk":
+      return {
+        label: "Risk-Off",
+        labelZh: "风险偏高",
+        tone: "risk",
+        summary: "Bearish signals are leading and the board should be read with caution.",
+      };
+    case "warming":
+      return {
+        label: "Warming",
+        labelZh: "偏暖",
+        tone: "warming",
+        summary: "Constructive signals are rising and the market tone is improving.",
+      };
+    default:
+      return {
+        label: "Balanced",
+        labelZh: "平衡",
+        tone: "neutral",
+        summary: "Signals are mixed and the market is waiting for a clearer lead.",
+      };
+  }
+}
+
 function writeJson(filePath, data) {
   try {
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -888,9 +914,14 @@ function buildBoardSummary() {
     : cachedSignals.some((item) => item.direction === "bullish")
       ? "warming"
       : "neutral";
+  const marketStateMeta = getMarketStateMeta(marketState);
 
   return {
     marketState,
+    marketStateLabel: marketStateMeta.label,
+    marketStateLabelZh: marketStateMeta.labelZh,
+    marketStateTone: marketStateMeta.tone,
+    marketStateSummary: marketStateMeta.summary,
     generatedAt: new Date().toISOString(),
     topNews,
     topSignals,
