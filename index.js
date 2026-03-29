@@ -475,7 +475,11 @@ if (require.main === module && !process.env.VERCEL) {
 
 app.get("/news", async (req, res) => {
   await bootstrapPromise;
-  res.json(cachedNews);
+  const limit = NEWS_LIMIT_OPTIONS.includes(Number(settings.newsLimit))
+    ? Number(settings.newsLimit)
+    : DEFAULT_SETTINGS.newsLimit;
+
+  res.json(cachedNews.slice(0, limit));
 });
 
 app.get("/signals", async (req, res) => {
