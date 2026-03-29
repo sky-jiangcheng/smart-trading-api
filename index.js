@@ -293,8 +293,40 @@ async function fetchNews() {
       dedupedStories.push(story);
     });
 
-  cachedNews = dedupedStories
-    .slice(0, 20)
+  const storiesBySource = new Map();
+
+  dedupedStories.forEach((story) => {
+    const sourceKey = story.sourceLabel || story.feedTitle || "News";
+    if (!storiesBySource.has(sourceKey)) {
+      storiesBySource.set(sourceKey, []);
+    }
+
+    storiesBySource.get(sourceKey).push(story);
+  });
+
+  const selectedStories = [];
+
+  storiesBySource.forEach((sourceStories) => {
+    sourceStories.slice(0, 2).forEach((story) => {
+      selectedStories.push(story);
+    });
+  });
+
+  selectedStories.sort((a, b) => {
+    const diff = parseTimestamp(b.publishedAt) - parseTimestamp(a.publishedAt);
+    if (diff !== 0) {
+      return diff;
+    }
+
+    if (a.feedTitle !== b.feedTitle) {
+      return a.feedTitle.localeCompare(b.feedTitle);
+    }
+
+    return a.order - b.order;
+  });
+
+  cachedNews = selectedStories
+    .slice(0, 40)
     .map((story, index) => buildNewsItem(story.item, story.sourceLabel || story.feedTitle, index));
   generateSignals();
 }
