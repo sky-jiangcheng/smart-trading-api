@@ -287,11 +287,6 @@ async function fetchNews() {
       if (diff !== 0) {
         return diff;
       }
-
-      if (a.sourceLabel !== b.sourceLabel) {
-        return a.sourceLabel.localeCompare(b.sourceLabel);
-      }
-
       return a.order - b.order;
     })
     .forEach((story) => {
@@ -308,11 +303,6 @@ async function fetchNews() {
     if (diff !== 0) {
       return diff;
     }
-
-    if (a.sourceLabel !== b.sourceLabel) {
-      return a.sourceLabel.localeCompare(b.sourceLabel);
-    }
-
     return a.order - b.order;
   });
 
