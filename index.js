@@ -14,6 +14,9 @@ const configDir = path.resolve(__dirname, "config");
 const sourcesPath = path.join(configDir, "sources.json");
 const signalsPath = path.join(configDir, "signals.json");
 const settingsPath = path.join(configDir, "settings.json");
+const CONFIG_STORE_KEY = process.env.CONFIG_STORE_KEY || "investment-dashboard:config";
+const UPSTASH_REDIS_REST_URL = process.env.UPSTASH_REDIS_REST_URL || "";
+const UPSTASH_REDIS_REST_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || "";
 const NEWS_LIMIT_OPTIONS = [50, 100, 200];
 const DEFAULT_SETTINGS = { newsLimit: 200 };
 
@@ -73,6 +76,69 @@ function writeJson(filePath, data) {
     console.error("Failed to write config file", filePath, error);
     return false;
   }
+}
+
+function hasRemoteConfigStore() {
+  return Boolean(UPSTASH_REDIS_REST_URL && UPSTASH_REDIS_REST_TOKEN);
+}
+
+async function readRemoteConfig() {
+  if (!hasRemoteConfigStore()) {
+    return null;
+  }
+
+  const response = await fetch(
+    `${UPSTASH_REDIS_REST_URL.replace(/\/$/, "")}/get/${encodeURIComponent(CONFIG_STORE_KEY)}`,
+    {
+      headers: {
+        Authorization: `Bearer ${UPSTASH_REDIS_REST_TOKEN}`,
+      },
+    },
+  );
+
+  if (!response.ok) {
+    throw new Error(`Remote config read failed: ${response.status} ${response.statusText}`);
+  }
+
+  const payload = await response.json();
+  if (!payload || payload.result == null) {
+    return null;
+  }
+
+  if (typeof payload.result === "string") {
+    try {
+      return JSON.parse(payload.result);
+    } catch (error) {
+      console.error("Failed to parse remote config JSON", error);
+      return null;
+    }
+  }
+
+  return payload.result;
+}
+
+async function writeRemoteConfig(data) {
+  if (!hasRemoteConfigStore()) {
+    return false;
+  }
+
+  const response = await fetch(
+    `${UPSTASH_REDIS_REST_URL.replace(/\/$/, "")}/set/${encodeURIComponent(CONFIG_STORE_KEY)}`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${UPSTASH_REDIS_REST_TOKEN}`,
+        "Content-Type": "text/plain; charset=utf-8",
+      },
+      body: JSON.stringify(data),
+    },
+  );
+
+  if (!response.ok) {
+    throw new Error(`Remote config write failed: ${response.status} ${response.statusText}`);
+  }
+
+  return true;
 }
 
 function getDomain(url) {
@@ -196,11 +262,9 @@ function buildFallbackNews() {
   }));
 }
 
-function loadConfig() {
-  const loadedSources = readJson(sourcesPath, SOURCE_PRESETS.map((preset) => preset.url));
-  sources = Array.isArray(loadedSources) ? loadedSources : SOURCE_PRESETS.map((preset) => preset.url);
-
-  const loadedSignalRules = readJson(signalsPath, [
+async function loadConfig() {
+  const fallbackSources = SOURCE_PRESETS.map((preset) => preset.url);
+  const fallbackSignalRules = [
     {
       keyword: "oil",
       asset: "Crude Oil",
@@ -219,35 +283,42 @@ function loadConfig() {
       direction: "bearish",
       reason: "Rate pressure",
     },
-  ]);
+  ];
 
-  signalRules = Array.isArray(loadedSignalRules)
-    ? loadedSignalRules
-    : [
-        {
-          keyword: "oil",
-          asset: "Crude Oil",
-          direction: "bullish",
-          reason: "Oil-related news",
-        },
-        {
-          keyword: "inflation",
-          asset: "Gold",
-          direction: "bullish",
-          reason: "Inflation hedge",
-        },
-        {
-          keyword: "rate",
-          asset: "NASDAQ",
-          direction: "bearish",
-          reason: "Rate pressure",
-        },
-      ];
+  const loadedRemote = await readRemoteConfig();
+  const loadedSources = loadedRemote && typeof loadedRemote === "object" ? loadedRemote.sources : null;
+  const loadedSignalRules = loadedRemote && typeof loadedRemote === "object" ? loadedRemote.signalRules : null;
+  const loadedSettings = loadedRemote && typeof loadedRemote === "object" ? loadedRemote.settings : null;
 
-  settings = normalizeSettings(readJson(settingsPath, DEFAULT_SETTINGS));
+  sources = Array.isArray(loadedSources) ? loadedSources : readJson(sourcesPath, fallbackSources);
+  if (!Array.isArray(sources)) {
+    sources = fallbackSources;
+  }
+
+  signalRules = Array.isArray(loadedSignalRules) ? loadedSignalRules : readJson(signalsPath, fallbackSignalRules);
+  if (!Array.isArray(signalRules)) {
+    signalRules = fallbackSignalRules;
+  }
+
+  settings = normalizeSettings(loadedSettings || readJson(settingsPath, DEFAULT_SETTINGS));
 }
 
-function saveConfig() {
+async function saveConfig() {
+  const bundle = {
+    sources,
+    signalRules,
+    settings,
+  };
+
+  if (hasRemoteConfigStore()) {
+    try {
+      await writeRemoteConfig(bundle);
+      return;
+    } catch (error) {
+      console.error("Remote config save failed, falling back to local files", error);
+    }
+  }
+
   writeJson(sourcesPath, sources);
   writeJson(signalsPath, signalRules);
   writeJson(settingsPath, settings);
@@ -385,31 +456,50 @@ function basicAuth(req, res, next) {
   return res.status(401).send("Authentication failed");
 }
 
-loadConfig();
-fetchNews();
-setInterval(fetchNews, 5 * 60 * 1000);
+const bootstrapPromise = (async () => {
+  await loadConfig();
+  await fetchNews();
+})().catch((error) => {
+  console.error("Initial news refresh failed", error);
+});
 
-app.get("/news", (req, res) => {
+if (require.main === module && !process.env.VERCEL) {
+  bootstrapPromise.finally(() => {
+    setInterval(() => {
+      fetchNews().catch((error) => {
+        console.error("Scheduled news refresh failed", error);
+      });
+    }, 5 * 60 * 1000);
+  });
+}
+
+app.get("/news", async (req, res) => {
+  await bootstrapPromise;
   res.json(cachedNews);
 });
 
-app.get("/signals", (req, res) => {
+app.get("/signals", async (req, res) => {
+  await bootstrapPromise;
   res.json(cachedSignals);
 });
 
-app.get("/sources", (req, res) => {
+app.get("/sources", async (req, res) => {
+  await bootstrapPromise;
   res.json({ sources: sources.map((url) => buildSourceMeta(url)) });
 });
 
-app.get("/settings", (req, res) => {
+app.get("/settings", async (req, res) => {
+  await bootstrapPromise;
   res.json(settings);
 });
 
-app.get("/admin/sources", basicAuth, (req, res) => {
+app.get("/admin/sources", basicAuth, async (req, res) => {
+  await bootstrapPromise;
   res.json({ sources });
 });
 
-app.post("/admin/sources", basicAuth, (req, res) => {
+app.post("/admin/sources", basicAuth, async (req, res) => {
+  await bootstrapPromise;
   const { url } = req.body;
   if (!url || typeof url !== "string") {
     return res.status(400).json({ message: "url is required" });
@@ -417,29 +507,32 @@ app.post("/admin/sources", basicAuth, (req, res) => {
 
   if (!sources.includes(url)) {
     sources.push(url);
-    saveConfig();
+    await saveConfig();
   }
 
   return res.json({ sources });
 });
 
-app.delete("/admin/sources", basicAuth, (req, res) => {
+app.delete("/admin/sources", basicAuth, async (req, res) => {
+  await bootstrapPromise;
   const { url } = req.body;
   if (!url || typeof url !== "string") {
     return res.status(400).json({ message: "url is required" });
   }
 
   sources = sources.filter((item) => item !== url);
-  saveConfig();
+  await saveConfig();
 
   return res.json({ sources });
 });
 
-app.get("/admin/rules", basicAuth, (req, res) => {
+app.get("/admin/rules", basicAuth, async (req, res) => {
+  await bootstrapPromise;
   res.json({ rules: signalRules });
 });
 
-app.post("/admin/rules", basicAuth, (req, res) => {
+app.post("/admin/rules", basicAuth, async (req, res) => {
+  await bootstrapPromise;
   const { keyword, asset, direction, reason } = req.body;
   if (!keyword || !asset) {
     return res.status(400).json({ message: "keyword and asset are required" });
@@ -454,29 +547,32 @@ app.post("/admin/rules", basicAuth, (req, res) => {
     signalRules.push({ keyword: normalizedKeyword, asset, direction: direction || "neutral", reason: reason || "" });
   }
 
-  saveConfig();
+  await saveConfig();
   generateSignals();
 
   return res.json({ rules: signalRules });
 });
 
-app.delete("/admin/rules", basicAuth, (req, res) => {
+app.delete("/admin/rules", basicAuth, async (req, res) => {
+  await bootstrapPromise;
   const { keyword } = req.body;
   if (!keyword) {
     return res.status(400).json({ message: "keyword is required" });
   }
 
   signalRules = signalRules.filter((rule) => rule.keyword.toLowerCase() !== keyword.toLowerCase());
-  saveConfig();
+  await saveConfig();
 
   return res.json({ rules: signalRules });
 });
 
-app.get("/admin/settings", basicAuth, (req, res) => {
+app.get("/admin/settings", basicAuth, async (req, res) => {
+  await bootstrapPromise;
   res.json({ settings });
 });
 
-app.post("/admin/settings", basicAuth, (req, res) => {
+app.post("/admin/settings", basicAuth, async (req, res) => {
+  await bootstrapPromise;
   const { newsLimit } = req.body || {};
   const parsedLimit = Number(newsLimit);
 
@@ -485,16 +581,21 @@ app.post("/admin/settings", basicAuth, (req, res) => {
   }
 
   settings = normalizeSettings({ newsLimit: parsedLimit });
-  saveConfig();
+  await saveConfig();
 
   return res.json({ settings });
 });
 
 app.post("/admin/refresh", basicAuth, async (req, res) => {
+  await bootstrapPromise;
   await fetchNews();
   return res.json({ newsCount: cachedNews.length, signalCount: cachedSignals.length });
 });
 
-app.listen(3001, () => {
-  console.log("API running on 3001");
-});
+module.exports = app;
+
+if (require.main === module && !process.env.VERCEL) {
+  app.listen(3001, () => {
+    console.log("API running on 3001");
+  });
+}

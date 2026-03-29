@@ -1,0 +1,13 @@
+{
+  "version": 2,
+  "rewrites": [
+    { "source": "/news", "destination": "/api/news" },
+    { "source": "/signals", "destination": "/api/signals" },
+    { "source": "/sources", "destination": "/api/sources" },
+    { "source": "/settings", "destination": "/api/settings" },
+    { "source": "/admin/sources", "destination": "/api/admin/sources" },
+    { "source": "/admin/rules", "destination": "/api/admin/rules" },
+    { "source": "/admin/settings", "destination": "/api/admin/settings" },
+    { "source": "/admin/refresh", "destination": "/api/admin/refresh" }
+  ]
+}
