@@ -67,6 +67,10 @@ function normalizeSettings(value) {
   return nextSettings;
 }
 
+function normalizeSettingsPayload(value) {
+  return normalizeSettings(value && typeof value === "object" ? value : DEFAULT_SETTINGS);
+}
+
 function writeJson(filePath, data) {
   try {
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -303,6 +307,25 @@ async function loadConfig() {
   settings = normalizeSettings(loadedSettings || readJson(settingsPath, DEFAULT_SETTINGS));
 }
 
+async function loadLatestSettings() {
+  if (hasRemoteConfigStore()) {
+    try {
+      const loadedRemote = await readRemoteConfig();
+      const loadedSettings = loadedRemote && typeof loadedRemote === "object" ? loadedRemote.settings : null;
+
+      if (loadedSettings) {
+        settings = normalizeSettingsPayload(loadedSettings);
+        return settings;
+      }
+    } catch (error) {
+      console.error("Failed to refresh remote settings", error);
+    }
+  }
+
+  settings = normalizeSettingsPayload(readJson(settingsPath, settings));
+  return settings;
+}
+
 async function saveConfig() {
   const bundle = {
     sources,
@@ -475,6 +498,7 @@ if (require.main === module && !process.env.VERCEL) {
 
 app.get("/news", async (req, res) => {
   await bootstrapPromise;
+  await loadLatestSettings();
   const limit = NEWS_LIMIT_OPTIONS.includes(Number(settings.newsLimit))
     ? Number(settings.newsLimit)
     : DEFAULT_SETTINGS.newsLimit;
@@ -494,6 +518,7 @@ app.get("/sources", async (req, res) => {
 
 app.get("/settings", async (req, res) => {
   await bootstrapPromise;
+  await loadLatestSettings();
   res.json(settings);
 });
 
@@ -572,6 +597,7 @@ app.delete("/admin/rules", basicAuth, async (req, res) => {
 
 app.get("/admin/settings", basicAuth, async (req, res) => {
   await bootstrapPromise;
+  await loadLatestSettings();
   res.json({ settings });
 });
 
@@ -586,6 +612,14 @@ app.post("/admin/settings", basicAuth, async (req, res) => {
 
   settings = normalizeSettings({ newsLimit: parsedLimit });
   await saveConfig();
+  await loadLatestSettings();
+
+  if (settings.newsLimit !== parsedLimit) {
+    return res.status(503).json({
+      message: "newsLimit save did not persist. Check production config storage for the API project.",
+      settings,
+    });
+  }
 
   return res.json({ settings });
 });
