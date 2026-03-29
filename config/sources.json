@@ -1,14 +1,5 @@
 [
-  "https://www.chinanews.com.cn/rss/finance.xml",
-  "http://www.people.com.cn/rss/politics.xml",
-  "http://www.chinadaily.com.cn/rss/china_rss.xml",
-  "https://rsshub.app/cctv/china",
-  "https://rsshub.app/zyw/hot/toutiao",
-  "https://rsshub.app/zyw/hot/weibo",
-  "https://rsshub.app/zhihu/hot",
-  "https://rsshub.app/zyw/hot/douyin",
-  "https://www.36kr.com/feed-newsflash",
   "https://www.cnbc.com/id/100003114/device/rss/rss.html",
   "https://feeds.marketwatch.com/marketwatch/topstories/",
-  "https://rsshub.app/caixinglobal/latest"
+  "http://www.chinadaily.com.cn/rss/china_rss.xml"
 ]
