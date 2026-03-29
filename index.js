@@ -13,6 +13,9 @@ app.use(express.json());
 const configDir = path.resolve(__dirname, "config");
 const sourcesPath = path.join(configDir, "sources.json");
 const signalsPath = path.join(configDir, "signals.json");
+const settingsPath = path.join(configDir, "settings.json");
+const NEWS_LIMIT_OPTIONS = [50, 100, 200];
+const DEFAULT_SETTINGS = { newsLimit: 200 };
 
 const SOURCE_PRESETS = [
   { url: "https://www.cnbc.com/id/100003114/device/rss/rss.html", label: "CNBC - Top Stories" },
@@ -35,16 +38,30 @@ let cachedNews = [];
 let cachedSignals = [];
 let sources = [];
 let signalRules = [];
+let settings = { ...DEFAULT_SETTINGS };
 
 function readJson(filePath, fallback) {
   try {
     const raw = fs.readFileSync(filePath, "utf-8");
     const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed)) return parsed;
-    return fallback;
+    return parsed ?? fallback;
   } catch (error) {
     return fallback;
   }
+}
+
+function normalizeSettings(value) {
+  const nextSettings = {
+    ...DEFAULT_SETTINGS,
+    ...(value && typeof value === "object" ? value : {}),
+  };
+
+  const parsedLimit = Number(nextSettings.newsLimit);
+  nextSettings.newsLimit = NEWS_LIMIT_OPTIONS.includes(parsedLimit)
+    ? parsedLimit
+    : DEFAULT_SETTINGS.newsLimit;
+
+  return nextSettings;
 }
 
 function writeJson(filePath, data) {
@@ -180,9 +197,10 @@ function buildFallbackNews() {
 }
 
 function loadConfig() {
-  sources = readJson(sourcesPath, SOURCE_PRESETS.map((preset) => preset.url));
+  const loadedSources = readJson(sourcesPath, SOURCE_PRESETS.map((preset) => preset.url));
+  sources = Array.isArray(loadedSources) ? loadedSources : SOURCE_PRESETS.map((preset) => preset.url);
 
-  signalRules = readJson(signalsPath, [
+  const loadedSignalRules = readJson(signalsPath, [
     {
       keyword: "oil",
       asset: "Crude Oil",
@@ -202,11 +220,37 @@ function loadConfig() {
       reason: "Rate pressure",
     },
   ]);
+
+  signalRules = Array.isArray(loadedSignalRules)
+    ? loadedSignalRules
+    : [
+        {
+          keyword: "oil",
+          asset: "Crude Oil",
+          direction: "bullish",
+          reason: "Oil-related news",
+        },
+        {
+          keyword: "inflation",
+          asset: "Gold",
+          direction: "bullish",
+          reason: "Inflation hedge",
+        },
+        {
+          keyword: "rate",
+          asset: "NASDAQ",
+          direction: "bearish",
+          reason: "Rate pressure",
+        },
+      ];
+
+  settings = normalizeSettings(readJson(settingsPath, DEFAULT_SETTINGS));
 }
 
 function saveConfig() {
   writeJson(sourcesPath, sources);
   writeJson(signalsPath, signalRules);
+  writeJson(settingsPath, settings);
 }
 
 function parseTimestamp(value) {
@@ -357,6 +401,10 @@ app.get("/sources", (req, res) => {
   res.json({ sources: sources.map((url) => buildSourceMeta(url)) });
 });
 
+app.get("/settings", (req, res) => {
+  res.json(settings);
+});
+
 app.get("/admin/sources", basicAuth, (req, res) => {
   res.json({ sources });
 });
@@ -422,6 +470,24 @@ app.delete("/admin/rules", basicAuth, (req, res) => {
   saveConfig();
 
   return res.json({ rules: signalRules });
+});
+
+app.get("/admin/settings", basicAuth, (req, res) => {
+  res.json({ settings });
+});
+
+app.post("/admin/settings", basicAuth, (req, res) => {
+  const { newsLimit } = req.body || {};
+  const parsedLimit = Number(newsLimit);
+
+  if (!NEWS_LIMIT_OPTIONS.includes(parsedLimit)) {
+    return res.status(400).json({ message: "newsLimit must be one of 50, 100, 200" });
+  }
+
+  settings = normalizeSettings({ newsLimit: parsedLimit });
+  saveConfig();
+
+  return res.json({ settings });
 });
 
 app.post("/admin/refresh", basicAuth, async (req, res) => {
