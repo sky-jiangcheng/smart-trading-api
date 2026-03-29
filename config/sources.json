@@ -1,4 +1,8 @@
 [
   "https://www.cnbc.com/id/100003114/device/rss/rss.html",
-  "https://feeds.marketwatch.com/marketwatch/topstories/"
+  "https://feeds.marketwatch.com/marketwatch/topstories/",
+  "https://www.chinanews.com.cn/rss/finance.xml",
+  "http://www.people.com.cn/rss/politics.xml",
+  "http://www.chinadaily.com.cn/rss/china_rss.xml",
+  "https://www.36kr.com/feed-newsflash"
 ]

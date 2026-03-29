@@ -154,6 +154,10 @@ function loadConfig() {
   sources = readJson(sourcesPath, [
     "https://www.cnbc.com/id/100003114/device/rss/rss.html",
     "https://feeds.marketwatch.com/marketwatch/topstories/",
+    "https://www.chinanews.com.cn/rss/finance.xml",
+    "http://www.people.com.cn/rss/politics.xml",
+    "http://www.chinadaily.com.cn/rss/china_rss.xml",
+    "https://www.36kr.com/feed-newsflash",
   ]);
 
   signalRules = readJson(signalsPath, [
@@ -183,6 +187,11 @@ function saveConfig() {
   writeJson(signalsPath, signalRules);
 }
 
+function parseTimestamp(value) {
+  const timestamp = Date.parse(value || "");
+  return Number.isNaN(timestamp) ? 0 : timestamp;
+}
+
 function generateSignals() {
   const signalMap = {};
 
@@ -205,27 +214,73 @@ function generateSignals() {
 }
 
 async function fetchNews() {
-  let feed = null;
+  const settledFeeds = await Promise.allSettled(
+    sources.map(async (url) => {
+      const feed = await parser.parseURL(url);
+      return { url, feed };
+    }),
+  );
 
-  for (const url of sources) {
-    try {
-      const candidateFeed = await parser.parseURL(url);
-      if (candidateFeed && Array.isArray(candidateFeed.items)) {
-        feed = candidateFeed;
-        break;
-      }
-    } catch (e) {
-      console.log("fail:", url, e.message);
+  const stories = [];
+
+  settledFeeds.forEach((result) => {
+    if (result.status !== "fulfilled") {
+      return;
     }
-  }
 
-  if (!feed || !Array.isArray(feed.items)) {
+    const { url, feed } = result.value;
+    if (!feed || !Array.isArray(feed.items)) {
+      return;
+    }
+
+    const feedTitle = feed.title || getDomain(url) || "News";
+
+    feed.items.forEach((item, itemIndex) => {
+      const publishedAt = item.pubDate || item.isoDate || null;
+      const key = item.link || item.guid || `${feedTitle}-${item.title || "item"}-${itemIndex}`;
+
+      stories.push({
+        key,
+        item,
+        feedTitle,
+        publishedAt,
+        order: itemIndex,
+      });
+    });
+  });
+
+  if (stories.length === 0) {
     cachedNews = buildFallbackNews();
     generateSignals();
     return;
   }
 
-  cachedNews = feed.items.slice(0, 10).map((item, index) => buildNewsItem(item, feed.title || "News", index));
+  const dedupedStories = [];
+  const seenKeys = new Set();
+
+  stories
+    .sort((a, b) => {
+      const diff = parseTimestamp(b.publishedAt) - parseTimestamp(a.publishedAt);
+      if (diff !== 0) {
+        return diff;
+      }
+
+      if (a.feedTitle !== b.feedTitle) {
+        return a.feedTitle.localeCompare(b.feedTitle);
+      }
+
+      return a.order - b.order;
+    })
+    .forEach((story) => {
+      if (seenKeys.has(story.key)) {
+        return;
+      }
+
+      seenKeys.add(story.key);
+      dedupedStories.push(story);
+    });
+
+  cachedNews = dedupedStories.slice(0, 20).map((story, index) => buildNewsItem(story.item, story.feedTitle, index));
   generateSignals();
 }
 
