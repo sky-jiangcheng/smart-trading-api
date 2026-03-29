@@ -14,6 +14,23 @@ const configDir = path.resolve(__dirname, "config");
 const sourcesPath = path.join(configDir, "sources.json");
 const signalsPath = path.join(configDir, "signals.json");
 
+const SOURCE_PRESETS = [
+  { url: "https://www.cnbc.com/id/100003114/device/rss/rss.html", label: "CNBC - Top Stories" },
+  { url: "https://feeds.marketwatch.com/marketwatch/topstories/", label: "MarketWatch - Top Stories" },
+  { url: "https://www.chinanews.com.cn/rss/finance.xml", label: "中国新闻网 - 财经" },
+  { url: "http://www.people.com.cn/rss/politics.xml", label: "人民网 - 时政" },
+  { url: "http://www.chinadaily.com.cn/rss/china_rss.xml", label: "中国日报 - 中国新闻" },
+  { url: "https://rsshub.app/cctv/china", label: "央视新闻 - 国内" },
+  { url: "https://rsshub.app/zyw/hot/toutiao", label: "今日头条 - 热榜" },
+  { url: "https://rsshub.app/zyw/hot/weibo", label: "微博 - 热搜榜" },
+  { url: "https://rsshub.app/zhihu/hot", label: "知乎 - 热榜" },
+  { url: "https://rsshub.app/zyw/hot/douyin", label: "抖音 - 热榜" },
+  { url: "https://www.36kr.com/feed-newsflash", label: "36氪 - 最新快讯" },
+  { url: "https://rsshub.app/caixinglobal/latest", label: "Caixin Global - Latest" },
+];
+
+const SOURCE_LABELS = new Map(SOURCE_PRESETS.map((preset) => [preset.url, preset.label]));
+
 let cachedNews = [];
 let cachedSignals = [];
 let sources = [];
@@ -80,9 +97,9 @@ function commentsFromText(text, seed = 0) {
   return Math.max(0, Math.floor(score / 4) + (seed % 7));
 }
 
-function buildNewsItem(item, feedTitle, index) {
-  const url = item.link || item.guid || `https://news.google.com/search?q=${encodeURIComponent(item.title || feedTitle || "news")}`;
+function buildNewsItem(item, sourceLabel, index) {
   const title = item.title || "Untitled story";
+  const url = item.link || item.guid || `https://news.google.com/search?q=${encodeURIComponent(title || "news")}`;
   const publishedAt = item.pubDate || item.isoDate || null;
   const combinedText = `${title} ${item.contentSnippet || item.summary || ""}`.toLowerCase();
 
@@ -92,7 +109,7 @@ function buildNewsItem(item, feedTitle, index) {
     title,
     url,
     domain: getDomain(url),
-    source: feedTitle || "News",
+    source: sourceLabel || "News",
     points: scoreFromText(combinedText, index),
     comments: commentsFromText(combinedText, index),
     age: toRelativeTime(publishedAt),
@@ -151,14 +168,7 @@ function buildFallbackNews() {
 }
 
 function loadConfig() {
-  sources = readJson(sourcesPath, [
-    "https://www.cnbc.com/id/100003114/device/rss/rss.html",
-    "https://feeds.marketwatch.com/marketwatch/topstories/",
-    "https://www.chinanews.com.cn/rss/finance.xml",
-    "http://www.people.com.cn/rss/politics.xml",
-    "http://www.chinadaily.com.cn/rss/china_rss.xml",
-    "https://www.36kr.com/feed-newsflash",
-  ]);
+  sources = readJson(sourcesPath, SOURCE_PRESETS.map((preset) => preset.url));
 
   signalRules = readJson(signalsPath, [
     {
@@ -234,6 +244,7 @@ async function fetchNews() {
     }
 
     const feedTitle = feed.title || getDomain(url) || "News";
+    const sourceLabel = SOURCE_LABELS.get(url) || feedTitle;
 
     feed.items.forEach((item, itemIndex) => {
       const publishedAt = item.pubDate || item.isoDate || null;
@@ -242,7 +253,9 @@ async function fetchNews() {
       stories.push({
         key,
         item,
+        url,
         feedTitle,
+        sourceLabel,
         publishedAt,
         order: itemIndex,
       });
@@ -280,7 +293,9 @@ async function fetchNews() {
       dedupedStories.push(story);
     });
 
-  cachedNews = dedupedStories.slice(0, 20).map((story, index) => buildNewsItem(story.item, story.feedTitle, index));
+  cachedNews = dedupedStories
+    .slice(0, 20)
+    .map((story, index) => buildNewsItem(story.item, story.sourceLabel || story.feedTitle, index));
   generateSignals();
 }
 
