@@ -1,0 +1,20 @@
+[
+  {
+    "keyword": "oil",
+    "asset": "Crude Oil",
+    "direction": "bullish",
+    "reason": "Oil-related news"
+  },
+  {
+    "keyword": "inflation",
+    "asset": "Gold",
+    "direction": "bullish",
+    "reason": "Inflation hedge"
+  },
+  {
+    "keyword": "rate",
+    "asset": "NASDAQ",
+    "direction": "bearish",
+    "reason": "Rate pressure"
+  }
+]
