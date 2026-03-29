@@ -42,6 +42,7 @@ let cachedSignals = [];
 let sources = [];
 let signalRules = [];
 let settings = { ...DEFAULT_SETTINGS };
+let cachedConfigSignature = "";
 
 function readJson(filePath, fallback) {
   try {
@@ -305,25 +306,68 @@ async function loadConfig() {
   }
 
   settings = normalizeSettings(loadedSettings || readJson(settingsPath, DEFAULT_SETTINGS));
+  cachedConfigSignature = createConfigSignature();
 }
 
-async function loadLatestSettings() {
+function createConfigSignature() {
+  return JSON.stringify({
+    sources,
+    signalRules,
+    settings,
+  });
+}
+
+async function loadLatestConfigBundle() {
+  const fallbackSources = SOURCE_PRESETS.map((preset) => preset.url);
+  const fallbackSignalRules = [
+    {
+      keyword: "oil",
+      asset: "Crude Oil",
+      direction: "bullish",
+      reason: "Oil-related news",
+    },
+    {
+      keyword: "inflation",
+      asset: "Gold",
+      direction: "bullish",
+      reason: "Inflation hedge",
+    },
+    {
+      keyword: "rate",
+      asset: "NASDAQ",
+      direction: "bearish",
+      reason: "Rate pressure",
+    },
+  ];
+
   if (hasRemoteConfigStore()) {
     try {
       const loadedRemote = await readRemoteConfig();
+      const loadedSources = loadedRemote && typeof loadedRemote === "object" ? loadedRemote.sources : null;
+      const loadedSignalRules = loadedRemote && typeof loadedRemote === "object" ? loadedRemote.signalRules : null;
       const loadedSettings = loadedRemote && typeof loadedRemote === "object" ? loadedRemote.settings : null;
 
-      if (loadedSettings) {
-        settings = normalizeSettingsPayload(loadedSettings);
-        return settings;
+      sources = Array.isArray(loadedSources) ? loadedSources : sources;
+      if (!Array.isArray(sources) || sources.length === 0) {
+        sources = readJson(sourcesPath, fallbackSources);
       }
+
+      signalRules = Array.isArray(loadedSignalRules) ? loadedSignalRules : signalRules;
+      if (!Array.isArray(signalRules) || signalRules.length === 0) {
+        signalRules = readJson(signalsPath, fallbackSignalRules);
+      }
+
+      settings = normalizeSettingsPayload(loadedSettings || settings);
+      return { sources, signalRules, settings };
     } catch (error) {
-      console.error("Failed to refresh remote settings", error);
+      console.error("Failed to refresh remote config", error);
     }
   }
 
+  sources = Array.isArray(sources) && sources.length > 0 ? sources : readJson(sourcesPath, fallbackSources);
+  signalRules = Array.isArray(signalRules) && signalRules.length > 0 ? signalRules : readJson(signalsPath, fallbackSignalRules);
   settings = normalizeSettingsPayload(readJson(settingsPath, settings));
-  return settings;
+  return { sources, signalRules, settings };
 }
 
 async function saveConfig() {
@@ -498,7 +542,13 @@ if (require.main === module && !process.env.VERCEL) {
 
 app.get("/news", async (req, res) => {
   await bootstrapPromise;
-  await loadLatestSettings();
+  const previousSignature = cachedConfigSignature;
+  await loadLatestConfigBundle();
+  const latestSignature = createConfigSignature();
+  if (latestSignature !== previousSignature) {
+    await fetchNews();
+    cachedConfigSignature = latestSignature;
+  }
   const limit = NEWS_LIMIT_OPTIONS.includes(Number(settings.newsLimit))
     ? Number(settings.newsLimit)
     : DEFAULT_SETTINGS.newsLimit;
@@ -508,27 +558,31 @@ app.get("/news", async (req, res) => {
 
 app.get("/signals", async (req, res) => {
   await bootstrapPromise;
+  await loadLatestConfigBundle();
   res.json(cachedSignals);
 });
 
 app.get("/sources", async (req, res) => {
   await bootstrapPromise;
+  await loadLatestConfigBundle();
   res.json({ sources: sources.map((url) => buildSourceMeta(url)) });
 });
 
 app.get("/settings", async (req, res) => {
   await bootstrapPromise;
-  await loadLatestSettings();
+  await loadLatestConfigBundle();
   res.json(settings);
 });
 
 app.get("/admin/sources", basicAuth, async (req, res) => {
   await bootstrapPromise;
+  await loadLatestConfigBundle();
   res.json({ sources });
 });
 
 app.post("/admin/sources", basicAuth, async (req, res) => {
   await bootstrapPromise;
+  await loadLatestConfigBundle();
   const { url } = req.body;
   if (!url || typeof url !== "string") {
     return res.status(400).json({ message: "url is required" });
@@ -537,6 +591,8 @@ app.post("/admin/sources", basicAuth, async (req, res) => {
   if (!sources.includes(url)) {
     sources.push(url);
     await saveConfig();
+    await fetchNews();
+    cachedConfigSignature = createConfigSignature();
   }
 
   return res.json({ sources });
@@ -544,6 +600,7 @@ app.post("/admin/sources", basicAuth, async (req, res) => {
 
 app.delete("/admin/sources", basicAuth, async (req, res) => {
   await bootstrapPromise;
+  await loadLatestConfigBundle();
   const { url } = req.body;
   if (!url || typeof url !== "string") {
     return res.status(400).json({ message: "url is required" });
@@ -551,17 +608,21 @@ app.delete("/admin/sources", basicAuth, async (req, res) => {
 
   sources = sources.filter((item) => item !== url);
   await saveConfig();
+  await fetchNews();
+  cachedConfigSignature = createConfigSignature();
 
   return res.json({ sources });
 });
 
 app.get("/admin/rules", basicAuth, async (req, res) => {
   await bootstrapPromise;
+  await loadLatestConfigBundle();
   res.json({ rules: signalRules });
 });
 
 app.post("/admin/rules", basicAuth, async (req, res) => {
   await bootstrapPromise;
+  await loadLatestConfigBundle();
   const { keyword, asset, direction, reason } = req.body;
   if (!keyword || !asset) {
     return res.status(400).json({ message: "keyword and asset are required" });
@@ -578,12 +639,15 @@ app.post("/admin/rules", basicAuth, async (req, res) => {
 
   await saveConfig();
   generateSignals();
+  await fetchNews();
+  cachedConfigSignature = createConfigSignature();
 
   return res.json({ rules: signalRules });
 });
 
 app.delete("/admin/rules", basicAuth, async (req, res) => {
   await bootstrapPromise;
+  await loadLatestConfigBundle();
   const { keyword } = req.body;
   if (!keyword) {
     return res.status(400).json({ message: "keyword is required" });
@@ -591,18 +655,22 @@ app.delete("/admin/rules", basicAuth, async (req, res) => {
 
   signalRules = signalRules.filter((rule) => rule.keyword.toLowerCase() !== keyword.toLowerCase());
   await saveConfig();
+  generateSignals();
+  await fetchNews();
+  cachedConfigSignature = createConfigSignature();
 
   return res.json({ rules: signalRules });
 });
 
 app.get("/admin/settings", basicAuth, async (req, res) => {
   await bootstrapPromise;
-  await loadLatestSettings();
+  await loadLatestConfigBundle();
   res.json({ settings });
 });
 
 app.post("/admin/settings", basicAuth, async (req, res) => {
   await bootstrapPromise;
+  await loadLatestConfigBundle();
   const { newsLimit } = req.body || {};
   const parsedLimit = Number(newsLimit);
 
@@ -612,7 +680,7 @@ app.post("/admin/settings", basicAuth, async (req, res) => {
 
   settings = normalizeSettings({ newsLimit: parsedLimit });
   await saveConfig();
-  await loadLatestSettings();
+  await loadLatestConfigBundle();
 
   if (settings.newsLimit !== parsedLimit) {
     return res.status(503).json({
