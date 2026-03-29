@@ -66,6 +66,17 @@ function getDomain(url) {
   }
 }
 
+function getSourceLabel(url) {
+  return SOURCE_LABELS.get(url) || getDomain(url);
+}
+
+function buildSourceMeta(url) {
+  return {
+    url,
+    label: getSourceLabel(url),
+  };
+}
+
 function toRelativeTime(dateValue) {
   if (!dateValue) return "just now";
 
@@ -97,7 +108,7 @@ function commentsFromText(text, seed = 0) {
   return Math.max(0, Math.floor(score / 4) + (seed % 7));
 }
 
-function buildNewsItem(item, sourceLabel, index) {
+function buildNewsItem(item, sourceLabel, sourceUrl, index) {
   const title = item.title || "Untitled story";
   const url = item.link || item.guid || `https://news.google.com/search?q=${encodeURIComponent(title || "news")}`;
   const publishedAt = item.pubDate || item.isoDate || null;
@@ -109,6 +120,7 @@ function buildNewsItem(item, sourceLabel, index) {
     title,
     url,
     domain: getDomain(url),
+    sourceUrl: sourceUrl || "",
     source: sourceLabel || "News",
     points: scoreFromText(combinedText, index),
     comments: commentsFromText(combinedText, index),
@@ -243,18 +255,16 @@ async function fetchNews() {
       return;
     }
 
-    const feedTitle = feed.title || getDomain(url) || "News";
-    const sourceLabel = SOURCE_LABELS.get(url) || feedTitle;
+    const sourceLabel = getSourceLabel(url);
 
     feed.items.forEach((item, itemIndex) => {
       const publishedAt = item.pubDate || item.isoDate || null;
-      const key = item.link || item.guid || `${feedTitle}-${item.title || "item"}-${itemIndex}`;
+      const key = item.link || item.guid || `${sourceLabel}-${item.title || "item"}-${itemIndex}`;
 
       stories.push({
         key,
         item,
         url,
-        feedTitle,
         sourceLabel,
         publishedAt,
         order: itemIndex,
@@ -278,8 +288,8 @@ async function fetchNews() {
         return diff;
       }
 
-      if (a.feedTitle !== b.feedTitle) {
-        return a.feedTitle.localeCompare(b.feedTitle);
+      if (a.sourceLabel !== b.sourceLabel) {
+        return a.sourceLabel.localeCompare(b.sourceLabel);
       }
 
       return a.order - b.order;
@@ -293,41 +303,22 @@ async function fetchNews() {
       dedupedStories.push(story);
     });
 
-  const storiesBySource = new Map();
-
-  dedupedStories.forEach((story) => {
-    const sourceKey = story.sourceLabel || story.feedTitle || "News";
-    if (!storiesBySource.has(sourceKey)) {
-      storiesBySource.set(sourceKey, []);
-    }
-
-    storiesBySource.get(sourceKey).push(story);
-  });
-
-  const selectedStories = [];
-
-  storiesBySource.forEach((sourceStories) => {
-    sourceStories.slice(0, 2).forEach((story) => {
-      selectedStories.push(story);
-    });
-  });
-
-  selectedStories.sort((a, b) => {
+  dedupedStories.sort((a, b) => {
     const diff = parseTimestamp(b.publishedAt) - parseTimestamp(a.publishedAt);
     if (diff !== 0) {
       return diff;
     }
 
-    if (a.feedTitle !== b.feedTitle) {
-      return a.feedTitle.localeCompare(b.feedTitle);
+    if (a.sourceLabel !== b.sourceLabel) {
+      return a.sourceLabel.localeCompare(b.sourceLabel);
     }
 
     return a.order - b.order;
   });
 
-  cachedNews = selectedStories
-    .slice(0, 40)
-    .map((story, index) => buildNewsItem(story.item, story.sourceLabel || story.feedTitle, index));
+  cachedNews = dedupedStories
+    .slice(0, 200)
+    .map((story, index) => buildNewsItem(story.item, story.sourceLabel || "News", story.url, index));
   generateSignals();
 }
 
@@ -362,6 +353,10 @@ app.get("/news", (req, res) => {
 
 app.get("/signals", (req, res) => {
   res.json(cachedSignals);
+});
+
+app.get("/sources", (req, res) => {
+  res.json({ sources: sources.map((url) => buildSourceMeta(url)) });
 });
 
 app.get("/admin/sources", basicAuth, (req, res) => {
