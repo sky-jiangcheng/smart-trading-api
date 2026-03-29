@@ -108,10 +108,10 @@ function commentsFromText(text, seed = 0) {
   return Math.max(0, Math.floor(score / 4) + (seed % 7));
 }
 
-function buildNewsItem(item, sourceLabel, sourceUrl, index) {
+function buildNewsItem(item, sourceLabel, sourceUrl, index, fallbackPublishedAt = null) {
   const title = item.title || "Untitled story";
   const url = item.link || item.guid || `https://news.google.com/search?q=${encodeURIComponent(title || "news")}`;
-  const publishedAt = item.pubDate || item.isoDate || null;
+  const publishedAt = item.pubDate || item.isoDate || item.updated || item.date || fallbackPublishedAt || null;
   const combinedText = `${title} ${item.contentSnippet || item.summary || ""}`.toLowerCase();
 
   return {
@@ -256,9 +256,15 @@ async function fetchNews() {
     }
 
     const sourceLabel = getSourceLabel(url);
+    const feedFetchedAt = Date.now();
 
     feed.items.forEach((item, itemIndex) => {
-      const publishedAt = item.pubDate || item.isoDate || null;
+      const publishedAt =
+        item.pubDate ||
+        item.isoDate ||
+        item.updated ||
+        item.date ||
+        new Date(feedFetchedAt - itemIndex * 1000).toISOString();
       const key = item.link || item.guid || `${sourceLabel}-${item.title || "item"}-${itemIndex}`;
 
       stories.push({
@@ -308,7 +314,9 @@ async function fetchNews() {
 
   cachedNews = dedupedStories
     .slice(0, 200)
-    .map((story, index) => buildNewsItem(story.item, story.sourceLabel || "News", story.url, index));
+    .map((story, index) =>
+      buildNewsItem(story.item, story.sourceLabel || "News", story.url, index, story.publishedAt),
+    );
   generateSignals();
 }
 
