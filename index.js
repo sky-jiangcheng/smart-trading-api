@@ -13,6 +13,7 @@ app.use(express.json());
 const configDir = path.resolve(__dirname, "config");
 const sourcesPath = path.join(configDir, "sources.json");
 const signalsPath = path.join(configDir, "signals.json");
+const thresholdsPath = path.join(configDir, "thresholds.json");
 const settingsPath = path.join(configDir, "settings.json");
 const CONFIG_STORE_KEY = process.env.CONFIG_STORE_KEY || "investment-dashboard:config";
 const UPSTASH_REDIS_REST_URL = process.env.UPSTASH_REDIS_REST_URL || "";
@@ -41,6 +42,7 @@ let cachedNews = [];
 let cachedSignals = [];
 let sources = [];
 let signalRules = [];
+let thresholds = [];
 let settings = { ...DEFAULT_SETTINGS };
 let cachedConfigSignature = "";
 
@@ -70,6 +72,50 @@ function normalizeSettings(value) {
 
 function normalizeSettingsPayload(value) {
   return normalizeSettings(value && typeof value === "object" ? value : DEFAULT_SETTINGS);
+}
+
+function normalizeThreshold(value, index = 0) {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const symbol = typeof value.symbol === "string" ? value.symbol.trim() : "";
+  const name = typeof value.name === "string" && value.name.trim() ? value.name.trim() : symbol;
+  const category = ["stock", "currency", "futures", "crypto", "macro"].includes(value.category)
+    ? value.category
+    : "stock";
+  const direction = value.direction === "below" ? "below" : "above";
+  const currentValue = Number(value.currentValue);
+  const thresholdValue = Number(value.thresholdValue);
+  const unit = typeof value.unit === "string" && value.unit.trim() ? value.unit.trim() : "USD";
+  const note = typeof value.note === "string" ? value.note.trim() : "";
+  const updatedAt = typeof value.updatedAt === "string" && value.updatedAt.trim() ? value.updatedAt.trim() : new Date(Date.now() - index * 60000).toISOString();
+
+  if (!symbol || !Number.isFinite(currentValue) || !Number.isFinite(thresholdValue)) {
+    return null;
+  }
+
+  return {
+    symbol,
+    name,
+    category,
+    direction,
+    currentValue,
+    thresholdValue,
+    unit,
+    note,
+    updatedAt,
+  };
+}
+
+function normalizeThresholds(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item, index) => normalizeThreshold(item, index))
+    .filter((item) => Boolean(item));
 }
 
 function writeJson(filePath, data) {
@@ -163,6 +209,66 @@ function buildSourceMeta(url) {
     url,
     label: getSourceLabel(url),
   };
+}
+
+function buildDefaultThresholds() {
+  return [
+    {
+      symbol: "AAPL",
+      name: "Apple",
+      category: "stock",
+      currentValue: 210.42,
+      thresholdValue: 205,
+      direction: "above",
+      unit: "USD",
+      note: "Breakout above resistance keeps the trend constructive.",
+      updatedAt: new Date().toISOString(),
+    },
+    {
+      symbol: "USD/CNY",
+      name: "US Dollar / Chinese Yuan",
+      category: "currency",
+      currentValue: 7.18,
+      thresholdValue: 7.2,
+      direction: "above",
+      unit: "CNY",
+      note: "Rising USD/CNY usually pressures risk assets and import costs.",
+      updatedAt: new Date().toISOString(),
+    },
+    {
+      symbol: "GC",
+      name: "Gold Futures",
+      category: "futures",
+      currentValue: 2328,
+      thresholdValue: 2300,
+      direction: "above",
+      unit: "USD/oz",
+      note: "Above the threshold, gold keeps its hedge profile.",
+      updatedAt: new Date().toISOString(),
+    },
+    {
+      symbol: "CL",
+      name: "Crude Oil Futures",
+      category: "futures",
+      currentValue: 82.6,
+      thresholdValue: 85,
+      direction: "below",
+      unit: "USD",
+      note: "Below the alert level, energy inflation pressure is easing.",
+      updatedAt: new Date().toISOString(),
+    },
+    {
+      symbol: "NASDAQ",
+      name: "NASDAQ 100",
+      category: "macro",
+      currentValue: 19520,
+      thresholdValue: 19200,
+      direction: "above",
+      unit: "pts",
+      note: "The index holding above the threshold supports risk-on sentiment.",
+      updatedAt: new Date().toISOString(),
+    },
+  ];
 }
 
 function toRelativeTime(dateValue) {
@@ -289,10 +395,12 @@ async function loadConfig() {
       reason: "Rate pressure",
     },
   ];
+  const fallbackThresholds = buildDefaultThresholds();
 
   const loadedRemote = await readRemoteConfig();
   const loadedSources = loadedRemote && typeof loadedRemote === "object" ? loadedRemote.sources : null;
   const loadedSignalRules = loadedRemote && typeof loadedRemote === "object" ? loadedRemote.signalRules : null;
+  const loadedThresholds = loadedRemote && typeof loadedRemote === "object" ? loadedRemote.thresholds : null;
   const loadedSettings = loadedRemote && typeof loadedRemote === "object" ? loadedRemote.settings : null;
 
   sources = Array.isArray(loadedSources) ? loadedSources : readJson(sourcesPath, fallbackSources);
@@ -303,6 +411,13 @@ async function loadConfig() {
   signalRules = Array.isArray(loadedSignalRules) ? loadedSignalRules : readJson(signalsPath, fallbackSignalRules);
   if (!Array.isArray(signalRules)) {
     signalRules = fallbackSignalRules;
+  }
+
+  thresholds = Array.isArray(loadedThresholds)
+    ? normalizeThresholds(loadedThresholds)
+    : normalizeThresholds(readJson(thresholdsPath, fallbackThresholds));
+  if (!Array.isArray(thresholds) || thresholds.length === 0) {
+    thresholds = fallbackThresholds;
   }
 
   settings = normalizeSettings(loadedSettings || readJson(settingsPath, DEFAULT_SETTINGS));
@@ -339,12 +454,14 @@ async function loadLatestConfigBundle() {
       reason: "Rate pressure",
     },
   ];
+  const fallbackThresholds = buildDefaultThresholds();
 
   if (hasRemoteConfigStore()) {
     try {
       const loadedRemote = await readRemoteConfig();
       const loadedSources = loadedRemote && typeof loadedRemote === "object" ? loadedRemote.sources : null;
       const loadedSignalRules = loadedRemote && typeof loadedRemote === "object" ? loadedRemote.signalRules : null;
+      const loadedThresholds = loadedRemote && typeof loadedRemote === "object" ? loadedRemote.thresholds : null;
       const loadedSettings = loadedRemote && typeof loadedRemote === "object" ? loadedRemote.settings : null;
 
       sources = Array.isArray(loadedSources) ? loadedSources : sources;
@@ -357,8 +474,13 @@ async function loadLatestConfigBundle() {
         signalRules = readJson(signalsPath, fallbackSignalRules);
       }
 
+      thresholds = Array.isArray(loadedThresholds) ? normalizeThresholds(loadedThresholds) : thresholds;
+      if (!Array.isArray(thresholds) || thresholds.length === 0) {
+        thresholds = normalizeThresholds(readJson(thresholdsPath, fallbackThresholds));
+      }
+
       settings = normalizeSettingsPayload(loadedSettings || settings);
-      return { sources, signalRules, settings };
+      return { sources, signalRules, thresholds, settings };
     } catch (error) {
       console.error("Failed to refresh remote config", error);
     }
@@ -366,14 +488,16 @@ async function loadLatestConfigBundle() {
 
   sources = Array.isArray(sources) && sources.length > 0 ? sources : readJson(sourcesPath, fallbackSources);
   signalRules = Array.isArray(signalRules) && signalRules.length > 0 ? signalRules : readJson(signalsPath, fallbackSignalRules);
+  thresholds = Array.isArray(thresholds) && thresholds.length > 0 ? thresholds : normalizeThresholds(readJson(thresholdsPath, fallbackThresholds));
   settings = normalizeSettingsPayload(readJson(settingsPath, settings));
-  return { sources, signalRules, settings };
+  return { sources, signalRules, thresholds, settings };
 }
 
 async function saveConfig() {
   const bundle = {
     sources,
     signalRules,
+    thresholds,
     settings,
   };
 
@@ -388,6 +512,7 @@ async function saveConfig() {
 
   writeJson(sourcesPath, sources);
   writeJson(signalsPath, signalRules);
+  writeJson(thresholdsPath, thresholds);
   writeJson(settingsPath, settings);
 }
 
@@ -568,6 +693,12 @@ app.get("/sources", async (req, res) => {
   res.json({ sources: sources.map((url) => buildSourceMeta(url)) });
 });
 
+app.get("/thresholds", async (req, res) => {
+  await bootstrapPromise;
+  await loadLatestConfigBundle();
+  res.json({ thresholds });
+});
+
 app.get("/settings", async (req, res) => {
   await bootstrapPromise;
   await loadLatestConfigBundle();
@@ -620,6 +751,12 @@ app.get("/admin/rules", basicAuth, async (req, res) => {
   res.json({ rules: signalRules });
 });
 
+app.get("/admin/thresholds", basicAuth, async (req, res) => {
+  await bootstrapPromise;
+  await loadLatestConfigBundle();
+  res.json({ thresholds });
+});
+
 app.post("/admin/rules", basicAuth, async (req, res) => {
   await bootstrapPromise;
   await loadLatestConfigBundle();
@@ -660,6 +797,60 @@ app.delete("/admin/rules", basicAuth, async (req, res) => {
   cachedConfigSignature = createConfigSignature();
 
   return res.json({ rules: signalRules });
+});
+
+app.post("/admin/thresholds", basicAuth, async (req, res) => {
+  await bootstrapPromise;
+  await loadLatestConfigBundle();
+  const nextThreshold = normalizeThreshold(req.body);
+
+  if (!nextThreshold) {
+    return res.status(400).json({
+      message: "symbol, currentValue, thresholdValue, and a valid category are required",
+    });
+  }
+
+  const existingIndex = thresholds.findIndex((item) => {
+    return item.symbol.toLowerCase() === nextThreshold.symbol.toLowerCase() && item.category === nextThreshold.category;
+  });
+
+  if (existingIndex >= 0) {
+    thresholds[existingIndex] = nextThreshold;
+  } else {
+    thresholds.push(nextThreshold);
+  }
+
+  await saveConfig();
+  cachedConfigSignature = createConfigSignature();
+
+  return res.json({ thresholds });
+});
+
+app.delete("/admin/thresholds", basicAuth, async (req, res) => {
+  await bootstrapPromise;
+  await loadLatestConfigBundle();
+  const { symbol, category } = req.body || {};
+
+  if (!symbol || typeof symbol !== "string") {
+    return res.status(400).json({ message: "symbol is required" });
+  }
+
+  thresholds = thresholds.filter((item) => {
+    if (item.symbol.toLowerCase() !== symbol.toLowerCase()) {
+      return true;
+    }
+
+    if (category && typeof category === "string") {
+      return item.category !== category;
+    }
+
+    return false;
+  });
+
+  await saveConfig();
+  cachedConfigSignature = createConfigSignature();
+
+  return res.json({ thresholds });
 });
 
 app.get("/admin/settings", basicAuth, async (req, res) => {
