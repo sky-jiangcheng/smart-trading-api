@@ -45,35 +45,37 @@ async function fetchNews() {
 
 // 🧠 规则引擎（核心）
 function generateSignals() {
-    cachedSignals = [];
+  const signalMap = {}; // 去重
 
-    cachedNews.forEach(n => {
-        const text = n.title.toLowerCase();
+  cachedNews.forEach(n => {
+    const text = n.title.toLowerCase();
 
-        if (text.includes("oil")) {
-            cachedSignals.push({
-                asset: "Crude Oil",
-                direction: "bullish",
-                reason: "Oil-related news",
-            });
-        }
+    if (text.includes("oil")) {
+      signalMap["Crude Oil"] = {
+        asset: "Crude Oil",
+        direction: "bullish",
+        reason: "Oil-related news",
+      };
+    }
 
-        if (text.includes("inflation")) {
-            cachedSignals.push({
-                asset: "Gold",
-                direction: "bullish",
-                reason: "Inflation hedge",
-            });
-        }
+    if (text.includes("inflation")) {
+      signalMap["Gold"] = {
+        asset: "Gold",
+        direction: "bullish",
+        reason: "Inflation hedge",
+      };
+    }
 
-        if (text.includes("rate")) {
-            cachedSignals.push({
-                asset: "NASDAQ",
-                direction: "bearish",
-                reason: "Rate pressure",
-            });
-        }
-    });
+    if (text.includes("rate")) {
+      signalMap["NASDAQ"] = {
+        asset: "NASDAQ",
+        direction: "bearish",
+        reason: "Rate pressure",
+      };
+    }
+  });
+
+  cachedSignals = Object.values(signalMap);
 }
 
 // ⏱ 初始化 + 每5分钟更新
