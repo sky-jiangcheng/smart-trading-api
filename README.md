@@ -17,6 +17,7 @@ Deploy the repo as-is and set these environment variables in Vercel:
 - `CONFIG_STORE_KEY` optional, defaults to `investment-dashboard:config`
 
 When the Upstash variables are present, `sources`, `signalRules`, `thresholds`, and `settings` are stored remotely and survive Vercel redeploys.
+Threshold current values are refreshed from a live market quote source on request, with a short in-memory TTL to keep the dashboard responsive.
 
 ## Endpoints
 

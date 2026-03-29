@@ -8,6 +8,9 @@
     "direction": "above",
     "unit": "USD",
     "note": "Breakout above resistance keeps the trend constructive.",
+    "marketSymbol": "AAPL",
+    "priority": "P0",
+    "tags": ["earnings", "tech"],
     "updatedAt": "2026-03-29T00:00:00.000Z"
   },
   {
@@ -19,6 +22,9 @@
     "direction": "above",
     "unit": "CNY",
     "note": "Rising USD/CNY usually pressures risk assets and import costs.",
+    "marketSymbol": "CNY=X",
+    "priority": "P1",
+    "tags": ["fx", "china"],
     "updatedAt": "2026-03-29T00:00:00.000Z"
   },
   {
@@ -30,6 +36,9 @@
     "direction": "above",
     "unit": "USD/oz",
     "note": "Above the threshold, gold keeps its hedge profile.",
+    "marketSymbol": "GC=F",
+    "priority": "P1",
+    "tags": ["inflation", "hedge"],
     "updatedAt": "2026-03-29T00:00:00.000Z"
   },
   {
@@ -41,6 +50,9 @@
     "direction": "below",
     "unit": "USD",
     "note": "Below the alert level, energy inflation pressure is easing.",
+    "marketSymbol": "CL=F",
+    "priority": "P2",
+    "tags": ["energy", "inflation"],
     "updatedAt": "2026-03-29T00:00:00.000Z"
   },
   {
@@ -52,6 +64,9 @@
     "direction": "above",
     "unit": "pts",
     "note": "The index holding above the threshold supports risk-on sentiment.",
+    "marketSymbol": "^NDX",
+    "priority": "P0",
+    "tags": ["risk-on", "growth"],
     "updatedAt": "2026-03-29T00:00:00.000Z"
   }
 ]

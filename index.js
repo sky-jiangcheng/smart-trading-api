@@ -20,6 +20,7 @@ const UPSTASH_REDIS_REST_URL = process.env.UPSTASH_REDIS_REST_URL || "";
 const UPSTASH_REDIS_REST_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || "";
 const NEWS_LIMIT_OPTIONS = [50, 100, 200];
 const DEFAULT_SETTINGS = { newsLimit: 200 };
+const THRESHOLD_MARKET_TTL_MS = 60 * 1000;
 
 const SOURCE_PRESETS = [
   { url: "https://www.cnbc.com/id/100003114/device/rss/rss.html", label: "CNBC - Top Stories" },
@@ -45,6 +46,8 @@ let signalRules = [];
 let thresholds = [];
 let settings = { ...DEFAULT_SETTINGS };
 let cachedConfigSignature = "";
+let thresholdMarketSnapshotAt = 0;
+let thresholdMarketRefreshPromise = null;
 
 function readJson(filePath, fallback) {
   try {
@@ -89,6 +92,20 @@ function normalizeThreshold(value, index = 0) {
   const thresholdValue = Number(value.thresholdValue);
   const unit = typeof value.unit === "string" && value.unit.trim() ? value.unit.trim() : "USD";
   const note = typeof value.note === "string" ? value.note.trim() : "";
+  const marketSymbol =
+    typeof value.marketSymbol === "string" && value.marketSymbol.trim()
+      ? value.marketSymbol.trim().toUpperCase()
+      : symbol;
+  const priority = ["P0", "P1", "P2"].includes(value.priority) ? value.priority : "P1";
+  const tags = Array.isArray(value.tags)
+    ? Array.from(
+        new Set(
+          value.tags
+            .map((tag) => (typeof tag === "string" ? tag.trim() : ""))
+            .filter((tag) => tag.length > 0),
+        ),
+      ).slice(0, 6)
+    : [];
   const updatedAt = typeof value.updatedAt === "string" && value.updatedAt.trim() ? value.updatedAt.trim() : new Date(Date.now() - index * 60000).toISOString();
 
   if (!symbol || !Number.isFinite(currentValue) || !Number.isFinite(thresholdValue)) {
@@ -104,6 +121,9 @@ function normalizeThreshold(value, index = 0) {
     thresholdValue,
     unit,
     note,
+    marketSymbol,
+    priority,
+    tags,
     updatedAt,
   };
 }
@@ -211,6 +231,95 @@ function buildSourceMeta(url) {
   };
 }
 
+function buildMarketSymbolMap() {
+  return {
+    AAPL: "AAPL",
+    "USD/CNY": "CNY=X",
+    "USD/CNH": "CNH=X",
+    GC: "GC=F",
+    CL: "CL=F",
+    NASDAQ: "^NDX",
+    SPX: "^GSPC",
+  };
+}
+
+async function refreshThresholdMarketData(items, force = false) {
+  if (!force && thresholdMarketSnapshotAt && Date.now() - thresholdMarketSnapshotAt < THRESHOLD_MARKET_TTL_MS) {
+    return Array.isArray(items) ? items : [];
+  }
+
+  if (thresholdMarketRefreshPromise) {
+    return thresholdMarketRefreshPromise;
+  }
+
+  const thresholdsList = Array.isArray(items) ? items : [];
+  const marketSymbols = Array.from(
+    new Set(
+      thresholdsList
+        .map((item) => item.marketSymbol || buildMarketSymbolMap()[item.symbol] || item.symbol)
+        .filter((value) => typeof value === "string" && value.trim().length > 0),
+    ),
+  );
+
+  if (marketSymbols.length === 0) {
+    thresholdMarketSnapshotAt = Date.now();
+    return thresholdsList;
+  }
+
+  thresholdMarketRefreshPromise = (async () => {
+    try {
+      const response = await fetch(
+        `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(marketSymbols.join(","))}`,
+        {
+          headers: {
+            Accept: "application/json",
+            "User-Agent": "Mozilla/5.0",
+          },
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error(`Market quote fetch failed: ${response.status} ${response.statusText}`);
+      }
+
+      const payload = await response.json();
+      const quoteMap = new Map(
+        Array.isArray(payload?.quoteResponse?.result)
+          ? payload.quoteResponse.result
+              .filter((item) => item && typeof item.symbol === "string" && Number.isFinite(item.regularMarketPrice))
+              .map((item) => [item.symbol, item])
+          : [],
+      );
+
+      return thresholdsList.map((item, index) => {
+        const marketSymbol = item.marketSymbol || buildMarketSymbolMap()[item.symbol] || item.symbol;
+        const quote = quoteMap.get(marketSymbol);
+
+        if (!quote || !Number.isFinite(quote.regularMarketPrice)) {
+          return item;
+        }
+
+        return normalizeThreshold(
+          {
+            ...item,
+            currentValue: Number(quote.regularMarketPrice),
+            updatedAt: quote.regularMarketTime ? new Date(quote.regularMarketTime * 1000).toISOString() : item.updatedAt,
+          },
+          index,
+        ) || item;
+    });
+    } catch (error) {
+      console.error("Failed to refresh market thresholds", error);
+      return thresholdsList;
+    } finally {
+      thresholdMarketSnapshotAt = Date.now();
+      thresholdMarketRefreshPromise = null;
+    }
+  })();
+
+  return thresholdMarketRefreshPromise;
+}
+
 function buildDefaultThresholds() {
   return [
     {
@@ -222,6 +331,9 @@ function buildDefaultThresholds() {
       direction: "above",
       unit: "USD",
       note: "Breakout above resistance keeps the trend constructive.",
+      marketSymbol: "AAPL",
+      priority: "P0",
+      tags: ["earnings", "tech"],
       updatedAt: new Date().toISOString(),
     },
     {
@@ -233,6 +345,9 @@ function buildDefaultThresholds() {
       direction: "above",
       unit: "CNY",
       note: "Rising USD/CNY usually pressures risk assets and import costs.",
+      marketSymbol: "CNY=X",
+      priority: "P1",
+      tags: ["fx", "china"],
       updatedAt: new Date().toISOString(),
     },
     {
@@ -244,6 +359,9 @@ function buildDefaultThresholds() {
       direction: "above",
       unit: "USD/oz",
       note: "Above the threshold, gold keeps its hedge profile.",
+      marketSymbol: "GC=F",
+      priority: "P1",
+      tags: ["inflation", "hedge"],
       updatedAt: new Date().toISOString(),
     },
     {
@@ -255,6 +373,9 @@ function buildDefaultThresholds() {
       direction: "below",
       unit: "USD",
       note: "Below the alert level, energy inflation pressure is easing.",
+      marketSymbol: "CL=F",
+      priority: "P2",
+      tags: ["energy", "inflation"],
       updatedAt: new Date().toISOString(),
     },
     {
@@ -266,6 +387,9 @@ function buildDefaultThresholds() {
       direction: "above",
       unit: "pts",
       note: "The index holding above the threshold supports risk-on sentiment.",
+      marketSymbol: "^NDX",
+      priority: "P0",
+      tags: ["risk-on", "growth"],
       updatedAt: new Date().toISOString(),
     },
   ];
@@ -428,6 +552,7 @@ function createConfigSignature() {
   return JSON.stringify({
     sources,
     signalRules,
+    thresholds,
     settings,
   });
 }
@@ -696,7 +821,9 @@ app.get("/sources", async (req, res) => {
 app.get("/thresholds", async (req, res) => {
   await bootstrapPromise;
   await loadLatestConfigBundle();
-  res.json({ thresholds });
+  const liveThresholds = await refreshThresholdMarketData(thresholds);
+  thresholds = liveThresholds;
+  res.json({ thresholds: liveThresholds });
 });
 
 app.get("/settings", async (req, res) => {
@@ -754,7 +881,9 @@ app.get("/admin/rules", basicAuth, async (req, res) => {
 app.get("/admin/thresholds", basicAuth, async (req, res) => {
   await bootstrapPromise;
   await loadLatestConfigBundle();
-  res.json({ thresholds });
+  const liveThresholds = await refreshThresholdMarketData(thresholds);
+  thresholds = liveThresholds;
+  res.json({ thresholds: liveThresholds });
 });
 
 app.post("/admin/rules", basicAuth, async (req, res) => {
@@ -821,6 +950,7 @@ app.post("/admin/thresholds", basicAuth, async (req, res) => {
   }
 
   await saveConfig();
+  thresholds = await refreshThresholdMarketData(thresholds, true);
   cachedConfigSignature = createConfigSignature();
 
   return res.json({ thresholds });
@@ -848,6 +978,7 @@ app.delete("/admin/thresholds", basicAuth, async (req, res) => {
   });
 
   await saveConfig();
+  thresholds = await refreshThresholdMarketData(thresholds, true);
   cachedConfigSignature = createConfigSignature();
 
   return res.json({ thresholds });
@@ -886,7 +1017,10 @@ app.post("/admin/settings", basicAuth, async (req, res) => {
 app.post("/admin/refresh", basicAuth, async (req, res) => {
   await bootstrapPromise;
   await fetchNews();
-  return res.json({ newsCount: cachedNews.length, signalCount: cachedSignals.length });
+  thresholds = await refreshThresholdMarketData(thresholds, true);
+  await saveConfig();
+  cachedConfigSignature = createConfigSignature();
+  return res.json({ newsCount: cachedNews.length, signalCount: cachedSignals.length, thresholdCount: thresholds.length });
 });
 
 module.exports = app;
